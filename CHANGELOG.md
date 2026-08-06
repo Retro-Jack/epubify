@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.1 — 2026-08-07
+
+### Fixed
+- **Name tidying no longer mangles the metadata sidecar.** pdf2epub writes `<document>_metadata.json`, and the normal rules turned that underscore into a space and title-cased the word — `Some Doc Metadata.json`. It reads fine but quietly drops the suffix anything parsing those files would look for. The suffix is now held aside while the document part is tidied, then reattached verbatim: `26NV001 - Neat_metadata.json` → `26NV001 Neat_metadata.json`.
+
+---
+
 ## v1.1.0 — 2026-08-06
 
 First version to have actually been run. v1.0.0 was written without a machine to test on; three of its assumptions turned out to be wrong, and conversion failed outright on every document.

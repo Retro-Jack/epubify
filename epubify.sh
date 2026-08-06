@@ -601,7 +601,7 @@ tidy_result() {
     # generated markdown references those files by their original names, and
     # renaming them would break every image link in the document.
     local result_dir="$1"
-    local file name stem ext new_stem new_name
+    local file name stem ext suffix known new_stem new_name
 
     while IFS= read -r -d '' file; do
         name="$(basename "$file")"
@@ -612,10 +612,25 @@ tidy_result() {
             ext=""
             stem="$name"
         fi
+
+        # pdf2epub names its sidecar "<document>_metadata.json". Left to the
+        # normal rules that underscore becomes a space and the word gets title
+        # case -- "Some Doc Metadata.json" -- which reads fine but quietly
+        # drops the suffix anything parsing these files would look for. Hold it
+        # aside, tidy the document part, then put it back verbatim.
+        suffix=""
+        for known in _metadata; do
+            if [[ "$stem" == *"$known" ]]; then
+                suffix="$known"
+                stem="${stem%"$known"}"
+                break
+            fi
+        done
+
         tidy_name new_stem "$stem"
         [[ -z "$new_stem" ]] && continue
-        new_name="$new_stem"
-        [[ -n "$ext" ]] && new_name="$new_stem.$ext"
+        new_name="$new_stem$suffix"
+        [[ -n "$ext" ]] && new_name="$new_stem$suffix.$ext"
         do_rename "$file" "$new_name"
     done < <(find "$result_dir" -maxdepth 1 -type f -print0 2>/dev/null)
 
