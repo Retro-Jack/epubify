@@ -1,0 +1,3 @@
+epubify.sh linguist-language=Shell
+*.sh linguist-language=Shell
+*.md linguist-detectable=false
