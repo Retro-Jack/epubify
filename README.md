@@ -40,23 +40,25 @@ Edit the variables at the top of `epubify.sh` to match your environment:
 ./epubify.sh
 ```
 
-The script is interactive and runs in three steps, pausing between each.
+Run with no arguments. There are no flags or positional parameters.
 
-At startup it asks for a **conversion mode**:
+At startup you choose a **conversion mode**:
 
 1. **Markdown + EPUB** — pdf2epub prompts for EPUB metadata (title, author, language) on each document, so this needs a real terminal and can't be left unattended.
 2. **Markdown only** — passes `--skip-epub` and runs without prompting.
 
-Then:
+The script then pauses between each of the three steps, and finishes with a summary and the option to empty the staging folder.
 
-1. **Copy** — PDFs are copied from `INPUT_DIR` to `STAGING_DIR`, preserving their relative paths. Name collisions become `name(1).pdf`, `name(2).pdf`, and so on. If the input folder is empty the step is skipped and whatever is already staged is used; if staging already holds PDFs you're asked before more are copied.
-2. **Convert** — one container per PDF, with staging mounted at `/data/input` and the output tree at `/data/output`, so nothing is ever written next to the source. Containers run as your UID, which is what stops the output coming back root-owned. Documents that have already been converted are detected and skipped — including ones renamed by step 3 on an earlier run.
-3. **Tidy names** — separators are normalised and title case applied to each result folder and its top-level files. Anything inside `images/` is deliberately left alone, since the generated markdown links to those files by name.
+## How It Works
 
-At the end you get a summary and the option to empty the staging folder.
+**Step 1 — Copy.** PDFs are copied from `INPUT_DIR` to `STAGING_DIR`, preserving their paths relative to the input root. Name collisions become `name(1).pdf`, `name(2).pdf`, and so on. If the input folder is empty the step is skipped and whatever is already staged is used; if staging already holds PDFs you're asked before more are copied.
+
+**Step 2 — Convert.** One container per PDF, with staging mounted at `/data/input` and the output tree at `/data/output`, so nothing is ever written next to the source. Containers run as your UID, which is what stops the output coming back root-owned, and `HOME` is redirected into the model cache so any library reaching for `~/.cache` has somewhere writable to land. Each conversion gets a memory ceiling and a wall-clock timeout. Documents that have already been converted are detected and skipped — including ones step 3 renamed on an earlier run, which is checked explicitly so repeat runs don't produce two copies of everything.
+
+**Step 3 — Tidy names.** Separators are normalised and title case applied to each result folder and its top-level files. Title case only touches a lowercase letter not preceded by a word character or an apostrophe, so acronyms survive and `jack's` doesn't become `Jack'S`. Anything inside `images/` is deliberately left alone, since the generated markdown links to those files by name.
 
 ## Errors
 
-Errors are written to `error_log.txt` in the output folder; the terminal only shows a `[WARN] See <log>` pointer. The log isn't created at all on a clean run, and each run appends a header with the mode, image and paths used.
+Errors are written to `error_log.txt` in the output folder; the terminal only shows a `[WARN] See <log>` pointer. The log isn't created at all on a clean run, and each run appends a header with the mode, image, paths and Docker version used.
 
-A failed conversion doesn't stop the run — the document is counted as failed and the next one starts. Interrupting the script mid-conversion force-removes the running container and deletes the partially written result folder.
+A failed conversion doesn't stop the run — the document is counted as failed and the next one starts. Interrupting the script mid-conversion force-removes the running container and deletes the partially written result folder, so nothing half-converted is left behind.
