@@ -1,0 +1,16 @@
+# Epubify — GPU variant of the pdf2epub image.
+#
+# The published image ships a CUDA build of PyTorch, so the model work can run
+# on an NVIDIA card. But PyTorch compiles GPU kernels at runtime through Triton,
+# and Triton shells out to a C compiler that the image doesn't contain — so
+# every GPU conversion dies on "Failed to find C compiler" before the first
+# page. (CPU conversions never take that path, which is why they work.)
+#
+# This adds the compiler and nothing else. Build it with:
+#     docker build -f Dockerfile.gpu -t epubify/pdf2epub:gpu .
+FROM ghcr.io/overcuriousity/pdf2epub:latest
+
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc libc6-dev \
+ && rm -rf /var/lib/apt/lists/*

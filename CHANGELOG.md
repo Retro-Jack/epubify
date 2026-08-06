@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.1.0 — 2026-08-06
+
+First version to have actually been run. v1.0.0 was written without a machine to test on; three of its assumptions turned out to be wrong, and conversion failed outright on every document.
+
+### Added
+- **GPU acceleration.** The image ships a CUDA build of PyTorch (`torch 2.13.0+cu130`), so the model work can run on an NVIDIA card. `USE_GPU` (default `true`) probes once at startup — if the host has the NVIDIA container runtime it reports the card by name and passes `--gpus all`; if not, it prints the install commands and carries on using the CPU, because Docker fails the *whole run* on an unsupported `--gpus` rather than one document. Measured on an RTX 4070 Ti against the CPU baseline: an 8-page document went **90s → 10s**, and a 77-page scan's layout pass went from ~9 seconds *per page* to ~34 pages *per second*.
+- **`Dockerfile.gpu`.** GPU runs use a locally built variant of the image. PyTorch compiles its GPU kernels at runtime through Triton, and Triton shells out to a C compiler the upstream image doesn't contain — so a GPU run on the stock image dies with `Failed to find C compiler` before the first page, while CPU runs (which never take that path) are unaffected. The variant adds `gcc` and nothing else, and is built automatically the first time a GPU run needs it.
+
+### Fixed
+- **Every conversion failed with a permission error.** pdf2epub creates a directory inside its own `site-packages` at runtime. That's fine for the image's default root user, but this script deliberately runs the container as your UID so the output tree doesn't come back root-owned — and `site-packages` is root-owned, so the `mkdir` failed with `[Errno 13] Permission denied: .../site-packages/static` and the document died before conversion started. A writable tmpfs is now mounted over that path (`APP_STATIC_DIR`), which costs nothing on the host, masks nothing in the image (the directory doesn't exist there), and keeps the non-root design intact.
+- **The header comment claimed the image was CPU-only** and told you to install pdf2epub natively for GPU support. It isn't, and you don't.
+
+### Changed
+- **Two remaining assumptions confirmed by a real run** rather than left as caveats: the `:latest` tag on ghcr.io is published and pulls cleanly (8.8 GB), and pdf2epub does write its results to `OUTPUT/<document name>/`.
+
+---
+
 ## v1.0.0 — 2026-08-06
 
 First release.

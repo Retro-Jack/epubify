@@ -23,16 +23,24 @@
 #      (title, author, language) per document, so this needs a real terminal.
 #   2. Markdown only    -- passes --skip-epub and runs unattended.
 #
-# Note: the published pdf2epub image is CPU-only. There is no --gpus flag here
-# because the image ships a CPU PyTorch build; a 4070 Ti will sit idle either
-# way. For GPU acceleration, install pdf2epub natively with a CUDA PyTorch
-# build instead of using this script.
+# Verified against ghcr.io/overcuriousity/pdf2epub:latest on 06/08/2026: the
+# :latest tag is published and pulls cleanly (8.8 GB), and pdf2epub does write
+# its results to OUTPUT/<document name>/ as assumed below.
+#
+# The image ships a CUDA build of PyTorch (torch 2.13.0+cu130), so the model
+# work can run on an NVIDIA card rather than the CPU -- the difference is
+# minutes per document. That needs the NVIDIA container runtime on the host
+# (nvidia-container-toolkit); see USE_GPU below.
 #
 # Requires: docker, perl. Other tools (find, sed, basename, mv, cp) are
 # standard on any Linux system. `timeout` is used when present.
 # =============================================================================
 
 set -uo pipefail
+
+# Where this script lives — used to find Dockerfile.gpu regardless of the
+# directory you happen to run it from.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 # ----- Configuration ---------------------------------------------------------
 
@@ -58,6 +66,39 @@ MODEL_CACHE="/mnt/misc/Conversion/pdf2epub/models"
 # pdf2epub, so it should have no reason to write next to the source. Set this
 # false if a conversion fails with a read-only filesystem error.
 INPUT_READ_ONLY=true
+
+# pdf2epub creates a directory inside its own site-packages at runtime. That
+# works for the image's default root user, but this script runs the container
+# as your UID (see --user below) and site-packages is root-owned, so the mkdir
+# fails with "Permission denied: .../site-packages/static" and every single
+# conversion dies before it starts. A writable tmpfs over that path gives it
+# somewhere to write without running as root or leaving anything on the host.
+# The directory does not exist in the image, so nothing is being masked.
+# Update the Python version here if a future image ships a different one; set
+# empty to disable the mount.
+APP_STATIC_DIR="/usr/local/lib/python3.13/site-packages/static"
+
+# Hand the container the GPU. The image's PyTorch is a CUDA build, so this is
+# the difference between minutes and seconds per document -- but it only works
+# if the host has the NVIDIA container runtime installed and wired into
+# Docker:
+#     sudo pacman -S nvidia-container-toolkit        (Arch/CachyOS)
+#     sudo nvidia-ctk runtime configure --runtime=docker
+#     sudo systemctl restart docker
+# Without it `docker run --gpus all` fails outright, so rather than let every
+# conversion die the script probes once at startup and quietly falls back to
+# the CPU. Set false to force CPU even where a card is available.
+USE_GPU=true
+
+# GPU runs use a locally built variant of the image rather than the published
+# one. PyTorch compiles its GPU kernels at runtime through Triton, and Triton
+# shells out to a C compiler that the upstream image doesn't contain -- so a
+# GPU run on the stock image dies with "Failed to find C compiler" before the
+# first page, while CPU runs (which never take that path) are fine. The
+# variant adds gcc and nothing else; see Dockerfile.gpu, which lives beside
+# this script and is built automatically the first time a GPU run needs it.
+GPU_IMAGE="epubify/pdf2epub:gpu"
+GPU_DOCKERFILE="Dockerfile.gpu"
 
 # Extra arguments appended to every pdf2epub invocation, e.g.
 # EXTRA_ARGS=(--start-page 10 --max-pages 50)
@@ -238,6 +279,47 @@ and set BUILD_CONTEXT at the top of this script to the checkout path:
   git clone https://github.com/overcuriousity/pdf2epub.git"
 }
 
+_gpu_enabled=false
+
+probe_gpu() {
+    # Decides once per run whether --gpus all can be passed. Docker fails the
+    # whole run if the NVIDIA runtime is missing, so this has to be settled
+    # before any real work starts rather than discovered per document.
+    $USE_GPU || { echo "[SETUP] GPU disabled in config -- using CPU."; return 0; }
+
+    if docker run --rm --gpus all --entrypoint true "$IMAGE" &>/dev/null; then
+        local name
+        name="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+
+        # The GPU needs the gcc-carrying variant; build it once if it isn't
+        # already here. A failed build is not fatal -- CPU still works.
+        if ! docker image inspect "$GPU_IMAGE" &>/dev/null; then
+            local dockerfile="$SCRIPT_DIR/$GPU_DOCKERFILE"
+            if [[ ! -f "$dockerfile" ]]; then
+                echo "[SETUP] ${name:-GPU} found, but $GPU_DOCKERFILE is missing -- using CPU."
+                return 0
+            fi
+            echo "[SETUP] ${name:-GPU} found. Building $GPU_IMAGE (one-off, adds a C compiler)..."
+            if ! docker build -q -f "$dockerfile" -t "$GPU_IMAGE" "$SCRIPT_DIR" &>/dev/null; then
+                warn "GPU image build failed -- falling back to CPU" \
+                     "Dockerfile: $dockerfile"
+                echo "[SETUP] GPU image build failed -- using CPU."
+                return 0
+            fi
+        fi
+
+        IMAGE="$GPU_IMAGE"
+        _gpu_enabled=true
+        echo "[SETUP] GPU available -- using ${name:-NVIDIA GPU}."
+    else
+        echo "[SETUP] No usable GPU runtime -- falling back to CPU."
+        echo "        For GPU acceleration install the NVIDIA container toolkit:"
+        echo "          sudo pacman -S nvidia-container-toolkit"
+        echo "          sudo nvidia-ctk runtime configure --runtime=docker"
+        echo "          sudo systemctl restart docker"
+    fi
+}
+
 choose_mode() {
     # pdf2epub prompts interactively for EPUB metadata and fails with an
     # EOFError if it cannot read from a terminal, so EPUB output and unattended
@@ -338,6 +420,8 @@ _docker_args() {
         -v "$MODEL_CACHE:/models"
     )
     [[ -n "$CONTAINER_MEM_MAX" ]] && _args+=(--memory "$CONTAINER_MEM_MAX")
+    [[ -n "$APP_STATIC_DIR" ]] && _args+=(--tmpfs "$APP_STATIC_DIR:rw,mode=1777")
+    $_gpu_enabled && _args+=(--gpus all)
     $INTERACTIVE && _args+=(-i -t)
 }
 
@@ -554,6 +638,7 @@ mkdir -p "$OUTPUT_DIR"  || die "Cannot create output directory: $OUTPUT_DIR"
 mkdir -p "$MODEL_CACHE" || die "Cannot create model cache directory: $MODEL_CACHE"
 
 ensure_image
+probe_gpu
 choose_mode
 
 # ----- Step 1: Copy from input -----------------------------------------------

@@ -12,7 +12,21 @@ Each converted document lands in its own folder containing the markdown, an `ima
 
 The container image (`ghcr.io/overcuriousity/pdf2epub:latest`) is pulled automatically on first run. It's a large download, and pdf2epub also fetches its layout/OCR models the first time it converts anything — both are one-off.
 
-> **CPU only.** The published image ships a CPU PyTorch build, so a CUDA GPU will sit idle regardless. For GPU acceleration, install pdf2epub natively with a CUDA PyTorch build instead of using this script.
+### GPU acceleration
+
+The image ships a **CUDA** build of PyTorch, so an NVIDIA card can do the model work — the difference is minutes per document. On an RTX 4070 Ti an 8-page document went from 90 seconds to 10, and a 77-page scan's layout pass from ~9 seconds per page to ~34 pages per second.
+
+It needs the NVIDIA container runtime on the host:
+
+```bash
+sudo pacman -S nvidia-container-toolkit        # Arch/CachyOS
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Epubify probes for this once at startup. If it's missing, it prints these commands and carries on using the CPU rather than failing. Set `USE_GPU=false` to force CPU.
+
+GPU runs use a locally built variant of the image (`Dockerfile.gpu`), built automatically the first time one is needed. PyTorch compiles its GPU kernels through Triton, which shells out to a C compiler the upstream image doesn't ship — without it a GPU run dies on `Failed to find C compiler` before the first page. The variant adds `gcc` and nothing else.
 
 ## Configuration
 
@@ -33,6 +47,10 @@ Edit the variables at the top of `epubify.sh` to match your environment:
 | `PROCESS_DELAY` | Seconds to pause between conversions (default: `2`) |
 | `EXCLUDED_BASENAMES` | Filenames (without extension) to skip, e.g. `sample`, `preview` |
 | `TIDY_NAMES` | Normalise separators and apply title case to output names (default: `true`) |
+| `USE_GPU` | Use an NVIDIA GPU when the host supports it (default: `true`); falls back to CPU with a notice |
+| `GPU_IMAGE` | Tag for the locally built GPU image (default: `epubify/pdf2epub:gpu`) |
+| `GPU_DOCKERFILE` | Dockerfile used to build it, resolved beside the script (default: `Dockerfile.gpu`) |
+| `APP_STATIC_DIR` | Path inside the container given a writable tmpfs, so pdf2epub can create it while running as your UID |
 
 ## Usage
 
